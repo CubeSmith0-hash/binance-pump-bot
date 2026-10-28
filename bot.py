@@ -3,9 +3,8 @@ import time
 import requests
 
 # --- Telegram Ayarları ---
-# BotFather'dan aldığın token ve Telegram Chat ID'ni buraya yazmalısın
-TELEGRAM_BOT_TOKEN = "BURAYA_BOT_TOKENINIZI_YAZIN"
-TELEGRAM_CHAT_ID = "BURAYA_CHAT_ID_YAZIN"
+TELEGRAM_BOT_TOKEN = 9173946791:AAGY3wveS05TECs-nEMbVA-1G55K0j-Izv8
+TELEGRAM_CHAT_ID = -1004318579434  # Grubun eksi(-) ID'si
 
 def send_telegram_msg(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -15,35 +14,45 @@ def send_telegram_msg(message):
     except Exception as e:
         print(f"Telegram mesaj hatası: {e}")
 
-# --- Binance Bağlantısı ---
+# --- Binance Futures Bağlantısı ---
 exchange = ccxt.binance({
     'enableRateLimit': True,
+    'options': {
+        'defaultType': 'future',  # USDⓈ-M Futures piyasası
+    }
 })
 
-# Eşik Değerler (İstediğin gibi değiştirebilirsin)
-VOLUME_MULTIPLIER = 5.0       # Hacim katı (Örn: Önceki ortalamanın 5 katı)
-PRICE_CHANGE_THRESHOLD = 4.0  # Min % fiyat artışı (Örn: %4)
+# Eşik Değerler
+VOLUME_MULTIPLIER = 5.0       # Hacim katı (Örn: Önceki 20 mumun ortalamasının 5 katı)
+PRICE_CHANGE_THRESHOLD = 3.0  # Min % fiyat artışı (Örn: %3)
 
-# Spam engellemek için daha önce uyarı gönderilen coin'leri tutacak sözlük
+# Aynı coin'in üst üste spam atmasını önlemek için cooldown sözlüğü
 cooldown_dict = {}
 
 def check_pump_signals():
-    print(f"[{time.strftime('%H:%M:%S')}] Binance spot piyasası taranıyor...")
+    print(f"[{time.strftime('%H:%M:%S')}] Binance USDⓈ-M Futures (Tüm Kriptolar) taranıyor...")
     try:
+        exchange.load_markets()
         tickers = exchange.fetch_tickers()
-        usdt_pairs = [symbol for symbol in tickers if symbol.endswith('/USDT')]
+        
+        # USDⓈ-M Futures piyasasındaki BÜTÜN USDT paritelerini filtrele
+        usdt_futures_pairs = [
+            symbol for symbol, market in exchange.markets.items() 
+            if symbol.endswith('/USDT') and market.get('linear', True) and market.get('active', True)
+        ]
     except Exception as e:
-        print(f"Ticker verileri alınamadı: {e}")
+        print(f"Piyasa verileri alınamadı: {e}")
         return
 
     current_time = time.time()
 
-    for symbol in usdt_pairs:
+    for symbol in usdt_futures_pairs:
         try:
-            # Aynı coin için son 30 dakika içinde tekrar bildirim gitmesin (Cooldonw)
+            # Aynı coin için 30 dakika içinde tekrar bildirim gitmesin
             if symbol in cooldown_dict and (current_time - cooldown_dict[symbol]) < 1800:
                 continue
 
+            # 15 dakikalık mumları çek
             ohlcv = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=21)
             if len(ohlcv) < 21:
                 continue
@@ -65,34 +74,33 @@ def check_pump_signals():
             vol_ratio = current_vol / avg_volume
             price_change = ((close_p - open_p) / open_p) * 100
 
-            # Şartlar: Hacim >= 5x VE Fiyat Değişimi >= %4
+            # Şartlar: Hacim katı ve fiyat artışı
             if vol_ratio >= VOLUME_MULTIPLIER and price_change >= PRICE_CHANGE_THRESHOLD:
                 
-                ticker_data = tickers[symbol]
+                ticker_data = tickers.get(symbol, {})
                 vol_24h_usdt = ticker_data.get('quoteVolume', 0)
 
+                formatted_symbol = symbol.replace('/', '')
                 msg = (
-                    f"🚨 *PUMP UYARISI / ANI HACİM ARTIŞI* 🚨\n\n"
+                    f"🚨 *FUTURES PUMP UYARISI* 🚨\n\n"
                     f"📌 *Coin:* `{symbol}`\n"
                     f"💵 *Güncel Fiyat:* `{close_p}`\n"
                     f"📈 *15d Fiyat Artışı:* `%{price_change:.2f}`\n"
                     f"📊 *Hacim Katlaması:* `{vol_ratio:.1f}x` (20 Ort. Göre)\n"
                     f"💰 *24s Hacim:* `${vol_24h_usdt:,.0f} USDT`\n\n"
-                    f"🔗 [Binance Grafiği](https://www.binance.com/en/trade/{symbol.replace('/', '_')})"
+                    f"🔗 [Binance Futures](https://www.binance.com/en/futures/{formatted_symbol})"
                 )
                 
                 send_telegram_msg(msg)
                 print(f"[YAKALANDI] {symbol} - Fiyat: %{price_change:.2f}, Hacim: {vol_ratio:.1f}x")
                 
-                # Cooldown süresini başlat (30 dakika boyunca tekrar bildirim atmaz)
                 cooldown_dict[symbol] = current_time
 
         except Exception as e:
             continue
 
 if __name__ == "__main__":
-    print("Pump Takip Botu Başlatıldı...")
+    print("Binance Futures Tüm Kriptolar Takip Botu Başlatıldı...")
     while True:
         check_pump_signals()
-        # Her 2 dakikada bir tarama döngüsünü çalıştırır
         time.sleep(120)
